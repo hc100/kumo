@@ -77,6 +77,15 @@ func (s *Service) initActionHandlers() {
 		"DeleteOpenIDConnectProvider":           s.DeleteOpenIDConnectProvider,
 		"ListOpenIDConnectProviders":            s.ListOpenIDConnectProviders,
 		"UpdateOpenIDConnectProviderThumbprint": s.UpdateOpenIDConnectProviderThumbprint,
+		// Instance profiles
+		"CreateInstanceProfile":         s.CreateInstanceProfile,
+		"DeleteInstanceProfile":         s.DeleteInstanceProfile,
+		"GetInstanceProfile":            s.GetInstanceProfile,
+		"ListInstanceProfiles":          s.ListInstanceProfiles,
+		"ListInstanceProfilesForRole":   s.ListInstanceProfilesForRole,
+		"AddRoleToInstanceProfile":      s.AddRoleToInstanceProfile,
+		"RemoveRoleFromInstanceProfile": s.RemoveRoleFromInstanceProfile,
+
 	}
 }
 
