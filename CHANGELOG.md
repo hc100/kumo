@@ -1,5 +1,10 @@
 # Changelog
 
+## [v0.19.1](https://github.com/sivchari/kumo/compare/v0.19.0...v0.19.1) - 2026-05-11
+- feat(s3): PutBucketLogging / GetBucketLogging by @mizchi in https://github.com/sivchari/kumo/pull/577
+- feat(apigateway): bare-prefix routes + DeleteMethod + path-extract fix by @mizchi in https://github.com/sivchari/kumo/pull/602
+- feat(server): KUMO_PPROF and KUMO_LOG_LEVEL env knobs by @mizchi in https://github.com/sivchari/kumo/pull/609
+
 ## [v0.19.0](https://github.com/sivchari/kumo/compare/v0.18.2...v0.19.0) - 2026-05-11
 - feat(ec2): implement CreateTags / DeleteTags / DescribeTags by @mizchi in https://github.com/sivchari/kumo/pull/547
 - feat(iam): inline role policies, ListAttachedRolePolicies, OIDC provider by @mizchi in https://github.com/sivchari/kumo/pull/548
