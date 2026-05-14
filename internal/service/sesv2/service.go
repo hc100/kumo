@@ -52,8 +52,16 @@ func (s *Service) RegisterRoutes(r service.Router) {
 	r.HandleFunc("GET", "/ses/v2/email/configuration-sets/{configurationSetName}", s.GetConfigurationSet)
 	r.HandleFunc("DELETE", "/ses/v2/email/configuration-sets/{configurationSetName}", s.DeleteConfigurationSet)
 
-	// Send Email route.
+	// Email Template routes.
+	r.HandleFunc("POST", "/ses/v2/email/templates", s.CreateEmailTemplate)
+	r.HandleFunc("GET", "/ses/v2/email/templates", s.ListEmailTemplates)
+	r.HandleFunc("GET", "/ses/v2/email/templates/{templateName}", s.GetEmailTemplate)
+	r.HandleFunc("PUT", "/ses/v2/email/templates/{templateName}", s.UpdateEmailTemplate)
+	r.HandleFunc("DELETE", "/ses/v2/email/templates/{templateName}", s.DeleteEmailTemplate)
+
+	// Send Email routes.
 	r.HandleFunc("POST", "/ses/v2/email/outbound-emails", s.SendEmail)
+	r.HandleFunc("POST", "/ses/v2/email/outbound-bulk-emails", s.SendBulkEmail)
 
 	// kumo-specific endpoint for testing.
 	r.HandleFunc("GET", "/kumo/ses/v2/sent-emails", s.GetSentEmails)

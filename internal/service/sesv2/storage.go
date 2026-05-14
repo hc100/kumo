@@ -40,8 +40,18 @@ type Storage interface {
 	ListConfigurationSets(ctx context.Context, nextToken string, pageSize int32) ([]string, string, error)
 	DeleteConfigurationSet(ctx context.Context, name string) error
 
+	// Email Template operations.
+	CreateEmailTemplate(ctx context.Context, req *CreateEmailTemplateRequest) (*EmailTemplate, error)
+	GetEmailTemplate(ctx context.Context, name string) (*EmailTemplate, error)
+	UpdateEmailTemplate(ctx context.Context, name string, req *UpdateEmailTemplateRequest) (*EmailTemplate, error)
+	DeleteEmailTemplate(ctx context.Context, name string) error
+	ListEmailTemplates(ctx context.Context, nextToken string, pageSize int32) ([]*EmailTemplate, string, error)
+
 	// Send Email.
 	SendEmail(ctx context.Context, req *SendEmailRequest) (string, error)
+
+	// Send Bulk Email.
+	SendBulkEmail(ctx context.Context, req *SendBulkEmailRequest) (*SendBulkEmailResponse, error)
 
 	// Get sent emails (for testing purposes).
 	GetSentEmails(ctx context.Context) ([]*SentEmail, error)
@@ -68,6 +78,7 @@ type MemoryStorage struct {
 	mu                sync.RWMutex                 `json:"-"`
 	EmailIdentities   map[string]*EmailIdentity    `json:"emailIdentities"`
 	ConfigurationSets map[string]*ConfigurationSet `json:"configurationSets"`
+	EmailTemplates    map[string]*EmailTemplate    `json:"emailTemplates"`
 	SentEmails        []*SentEmail                 `json:"sentEmails"`
 	dataDir           string
 }
@@ -77,6 +88,7 @@ func NewMemoryStorage(opts ...Option) *MemoryStorage {
 	s := &MemoryStorage{
 		EmailIdentities:   make(map[string]*EmailIdentity),
 		ConfigurationSets: make(map[string]*ConfigurationSet),
+		EmailTemplates:    make(map[string]*EmailTemplate),
 		SentEmails:        make([]*SentEmail, 0),
 	}
 	for _, o := range opts {
@@ -124,6 +136,10 @@ func (s *MemoryStorage) UnmarshalJSON(data []byte) error {
 
 	if s.ConfigurationSets == nil {
 		s.ConfigurationSets = make(map[string]*ConfigurationSet)
+	}
+
+	if s.EmailTemplates == nil {
+		s.EmailTemplates = make(map[string]*EmailTemplate)
 	}
 
 	return nil
@@ -355,6 +371,133 @@ func (s *MemoryStorage) DeleteConfigurationSet(_ context.Context, name string) e
 	return nil
 }
 
+// CreateEmailTemplate creates a new email template.
+func (s *MemoryStorage) CreateEmailTemplate(_ context.Context, req *CreateEmailTemplateRequest) (*EmailTemplate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if req.TemplateName == "" {
+		return nil, &IdentityError{
+			Code:    errInvalidParameter,
+			Message: "TemplateName is required",
+		}
+	}
+
+	if req.TemplateContent == nil {
+		return nil, &IdentityError{
+			Code:    errInvalidParameter,
+			Message: "TemplateContent is required",
+		}
+	}
+
+	if _, exists := s.EmailTemplates[req.TemplateName]; exists {
+		return nil, &IdentityError{
+			Code:    errAlreadyExists,
+			Message: "The email template already exists",
+		}
+	}
+
+	tmpl := &EmailTemplate{
+		Name:             req.TemplateName,
+		TemplateContent:  cloneTemplateContent(req.TemplateContent),
+		CreatedTimestamp: time.Now(),
+	}
+
+	s.EmailTemplates[req.TemplateName] = tmpl
+
+	return tmpl, nil
+}
+
+// GetEmailTemplate retrieves an email template.
+func (s *MemoryStorage) GetEmailTemplate(_ context.Context, name string) (*EmailTemplate, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	tmpl, exists := s.EmailTemplates[name]
+	if !exists {
+		return nil, &IdentityError{
+			Code:    errNotFound,
+			Message: "The email template does not exist",
+		}
+	}
+
+	return tmpl, nil
+}
+
+// UpdateEmailTemplate replaces the content of an existing email template.
+func (s *MemoryStorage) UpdateEmailTemplate(_ context.Context, name string, req *UpdateEmailTemplateRequest) (*EmailTemplate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if req.TemplateContent == nil {
+		return nil, &IdentityError{
+			Code:    errInvalidParameter,
+			Message: "TemplateContent is required",
+		}
+	}
+
+	tmpl, exists := s.EmailTemplates[name]
+	if !exists {
+		return nil, &IdentityError{
+			Code:    errNotFound,
+			Message: "The email template does not exist",
+		}
+	}
+
+	tmpl.TemplateContent = cloneTemplateContent(req.TemplateContent)
+
+	return tmpl, nil
+}
+
+// DeleteEmailTemplate deletes an email template.
+func (s *MemoryStorage) DeleteEmailTemplate(_ context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.EmailTemplates[name]; !exists {
+		return &IdentityError{
+			Code:    errNotFound,
+			Message: "The email template does not exist",
+		}
+	}
+
+	delete(s.EmailTemplates, name)
+
+	return nil
+}
+
+// ListEmailTemplates lists all email templates.
+func (s *MemoryStorage) ListEmailTemplates(_ context.Context, _ string, pageSize int32) ([]*EmailTemplate, string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+
+	templates := make([]*EmailTemplate, 0, len(s.EmailTemplates))
+	for _, tmpl := range s.EmailTemplates {
+		templates = append(templates, tmpl)
+	}
+
+	if len(templates) > int(pageSize) {
+		templates = templates[:pageSize]
+	}
+
+	return templates, "", nil
+}
+
+// cloneTemplateContent returns a deep copy of the template content to avoid aliasing.
+func cloneTemplateContent(src *EmailTemplateContent) *EmailTemplateContent {
+	if src == nil {
+		return nil
+	}
+
+	clone := *src
+
+	return &clone
+}
+
 // SendEmail sends an email (stores it for testing).
 func (s *MemoryStorage) SendEmail(_ context.Context, req *SendEmailRequest) (string, error) {
 	s.mu.Lock()
@@ -422,6 +565,132 @@ func (s *MemoryStorage) SendEmail(_ context.Context, req *SendEmailRequest) (str
 	s.saveLocked()
 
 	return messageID, nil
+}
+
+// SendBulkEmail sends one email per BulkEmailEntry, recording each as a SentEmail.
+//
+// AWS SES v2 returns HTTP 200 with per-entry status even when individual entries
+// fail validation. Errors at the request level (missing entries, missing template,
+// unknown template) result in HTTP 400.
+func (s *MemoryStorage) SendBulkEmail(_ context.Context, req *SendBulkEmailRequest) (*SendBulkEmailResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(req.BulkEmailEntries) == 0 {
+		return nil, &IdentityError{
+			Code:    errBadRequest,
+			Message: "BulkEmailEntries is required",
+		}
+	}
+
+	if req.DefaultContent == nil || req.DefaultContent.Template == nil {
+		return nil, &IdentityError{
+			Code:    errBadRequest,
+			Message: "DefaultContent.Template is required",
+		}
+	}
+
+	defaultTemplate := req.DefaultContent.Template
+	templateName := defaultTemplate.TemplateName
+
+	if templateName == "" {
+		return nil, &IdentityError{
+			Code:    errBadRequest,
+			Message: "DefaultContent.Template.TemplateName is required",
+		}
+	}
+
+	// Resolve template content. AWS rejects sends against unknown templates.
+	tmpl, exists := s.EmailTemplates[templateName]
+	if !exists {
+		return nil, &IdentityError{
+			Code:    errNotFound,
+			Message: "The email template does not exist",
+		}
+	}
+
+	results := make([]BulkEmailEntryResult, 0, len(req.BulkEmailEntries))
+
+	for _, entry := range req.BulkEmailEntries {
+		messageID := uuid.New().String()
+
+		hasDestination := entry.Destination != nil &&
+			(len(entry.Destination.ToAddresses) > 0 ||
+				len(entry.Destination.CcAddresses) > 0 ||
+				len(entry.Destination.BccAddresses) > 0)
+
+		if !hasDestination {
+			results = append(results, BulkEmailEntryResult{
+				Status:    "FAILED",
+				Error:     "Destination is required",
+				MessageID: messageID,
+			})
+
+			continue
+		}
+
+		templateData := defaultTemplate.TemplateData
+		if entry.ReplacementEmailContent != nil &&
+			entry.ReplacementEmailContent.ReplacementTemplate != nil &&
+			entry.ReplacementEmailContent.ReplacementTemplate.ReplacementTemplateData != "" {
+			templateData = entry.ReplacementEmailContent.ReplacementTemplate.ReplacementTemplateData
+		}
+
+		subject := ""
+		body := ""
+		htmlBody := ""
+
+		if tmpl.TemplateContent != nil {
+			subject = tmpl.TemplateContent.Subject
+			body = tmpl.TemplateContent.Text
+			htmlBody = tmpl.TemplateContent.HTML
+		}
+
+		sent := &SentEmail{
+			MessageID:            messageID,
+			FromEmailAddress:     req.FromEmailAddress,
+			Destination:          cloneDestination(entry.Destination),
+			Subject:              subject,
+			Body:                 body,
+			HTMLBody:             htmlBody,
+			TemplateName:         templateName,
+			TemplateData:         templateData,
+			ConfigurationSetName: req.ConfigurationSetName,
+			SentAt:               time.Now(),
+		}
+
+		s.SentEmails = append(s.SentEmails, sent)
+
+		results = append(results, BulkEmailEntryResult{
+			Status:    "SUCCESS",
+			MessageID: messageID,
+		})
+	}
+
+	return &SendBulkEmailResponse{BulkEmailEntryResults: results}, nil
+}
+
+// cloneDestination returns a deep copy of a destination to avoid aliasing.
+func cloneDestination(src *Destination) *Destination {
+	if src == nil {
+		return nil
+	}
+
+	clone := &Destination{}
+
+	if len(src.ToAddresses) > 0 {
+		clone.ToAddresses = append([]string{}, src.ToAddresses...)
+	}
+
+	if len(src.CcAddresses) > 0 {
+		clone.CcAddresses = append([]string{}, src.CcAddresses...)
+	}
+
+	if len(src.BccAddresses) > 0 {
+		clone.BccAddresses = append([]string{}, src.BccAddresses...)
+	}
+
+	return clone
 }
 
 // GetSentEmails returns all sent emails (for testing).

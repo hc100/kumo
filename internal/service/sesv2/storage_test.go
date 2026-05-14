@@ -105,3 +105,247 @@ func TestSendEmail_SimpleEmailWithoutDestination_ShouldFail(t *testing.T) {
 		t.Errorf("expected 'Destination is required', got '%s'", identityErr.Message)
 	}
 }
+
+func TestEmailTemplate_CRUD(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	const name = "welcome"
+
+	// Create.
+	created, err := storage.CreateEmailTemplate(ctx, &CreateEmailTemplateRequest{
+		TemplateName: name,
+		TemplateContent: &EmailTemplateContent{
+			Subject: "Hello",
+			Text:    "Body text",
+			HTML:    "<p>Body HTML</p>",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if created.Name != name {
+		t.Fatalf("created name=%q want %q", created.Name, name)
+	}
+
+	// Get.
+	got, err := storage.GetEmailTemplate(ctx, name)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if got.TemplateContent == nil || got.TemplateContent.Subject != "Hello" {
+		t.Fatalf("get returned unexpected content: %+v", got.TemplateContent)
+	}
+
+	// Update.
+	if _, err := storage.UpdateEmailTemplate(ctx, name, &UpdateEmailTemplateRequest{
+		TemplateContent: &EmailTemplateContent{
+			Subject: "Hello v2",
+			Text:    "Body text v2",
+		},
+	}); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	updated, err := storage.GetEmailTemplate(ctx, name)
+	if err != nil {
+		t.Fatalf("get after update failed: %v", err)
+	}
+	if updated.TemplateContent.Subject != "Hello v2" {
+		t.Errorf("expected updated subject, got %q", updated.TemplateContent.Subject)
+	}
+	if updated.TemplateContent.HTML != "" {
+		t.Errorf("expected HTML cleared on update, got %q", updated.TemplateContent.HTML)
+	}
+
+	// List.
+	list, _, err := storage.ListEmailTemplates(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if len(list) != 1 || list[0].Name != name {
+		t.Fatalf("unexpected list result: %+v", list)
+	}
+
+	// Delete.
+	if err := storage.DeleteEmailTemplate(ctx, name); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+
+	if _, err := storage.GetEmailTemplate(ctx, name); err == nil {
+		t.Fatal("expected error for deleted template")
+	}
+}
+
+func TestEmailTemplate_DuplicateCreate(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	req := &CreateEmailTemplateRequest{
+		TemplateName:    "dup",
+		TemplateContent: &EmailTemplateContent{Subject: "s"},
+	}
+
+	if _, err := storage.CreateEmailTemplate(ctx, req); err != nil {
+		t.Fatalf("first create failed: %v", err)
+	}
+
+	_, err := storage.CreateEmailTemplate(ctx, req)
+	if err == nil {
+		t.Fatal("expected error on duplicate create")
+	}
+
+	var iErr *IdentityError
+	if !errors.As(err, &iErr) || iErr.Code != errAlreadyExists {
+		t.Fatalf("expected errAlreadyExists, got %v", err)
+	}
+}
+
+func TestEmailTemplate_GetNotFound(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	_, err := storage.GetEmailTemplate(ctx, "missing")
+	if err == nil {
+		t.Fatal("expected error for missing template")
+	}
+
+	var iErr *IdentityError
+	if !errors.As(err, &iErr) || iErr.Code != errNotFound {
+		t.Fatalf("expected errNotFound, got %v", err)
+	}
+}
+
+func TestSendBulkEmail_AssignsMessageIDPerEntry(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	// Set up a template referenced by the bulk request.
+	if _, err := storage.CreateEmailTemplate(ctx, &CreateEmailTemplateRequest{
+		TemplateName: "promo",
+		TemplateContent: &EmailTemplateContent{
+			Subject: "Promo",
+			Text:    "Hello {{name}}",
+		},
+	}); err != nil {
+		t.Fatalf("template create failed: %v", err)
+	}
+
+	req := &SendBulkEmailRequest{
+		FromEmailAddress: "sender@example.com",
+		DefaultContent: &BulkEmailContent{
+			Template: &Template{
+				TemplateName: "promo",
+				TemplateData: "{}",
+			},
+		},
+		BulkEmailEntries: []BulkEmailEntry{
+			{
+				Destination: &Destination{ToAddresses: []string{"a@example.com"}},
+				ReplacementEmailContent: &ReplacementEmailContent{
+					ReplacementTemplate: &ReplacementTemplate{ReplacementTemplateData: `{"name":"A"}`},
+				},
+			},
+			{
+				Destination: &Destination{ToAddresses: []string{"b@example.com"}},
+				ReplacementEmailContent: &ReplacementEmailContent{
+					ReplacementTemplate: &ReplacementTemplate{ReplacementTemplateData: `{"name":"B"}`},
+				},
+			},
+		},
+	}
+
+	resp, err := storage.SendBulkEmail(ctx, req)
+	if err != nil {
+		t.Fatalf("send bulk failed: %v", err)
+	}
+	if len(resp.BulkEmailEntryResults) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(resp.BulkEmailEntryResults))
+	}
+
+	ids := map[string]struct{}{}
+
+	for i, r := range resp.BulkEmailEntryResults {
+		if r.Status != "SUCCESS" {
+			t.Errorf("entry %d: status=%q want SUCCESS (err=%q)", i, r.Status, r.Error)
+		}
+		if r.MessageID == "" {
+			t.Errorf("entry %d: empty MessageId", i)
+		}
+		ids[r.MessageID] = struct{}{}
+	}
+
+	if len(ids) != 2 {
+		t.Errorf("expected 2 distinct MessageIds, got %d", len(ids))
+	}
+
+	sent, err := storage.GetSentEmails(ctx)
+	if err != nil {
+		t.Fatalf("get sent emails failed: %v", err)
+	}
+	if len(sent) != 2 {
+		t.Fatalf("expected 2 stored emails, got %d", len(sent))
+	}
+	if sent[0].TemplateName != "promo" {
+		t.Errorf("expected TemplateName=promo, got %q", sent[0].TemplateName)
+	}
+	if sent[0].TemplateData != `{"name":"A"}` {
+		t.Errorf("expected per-entry replacement data, got %q", sent[0].TemplateData)
+	}
+}
+
+func TestSendBulkEmail_UnknownTemplateFails(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	_, err := storage.SendBulkEmail(ctx, &SendBulkEmailRequest{
+		FromEmailAddress: "sender@example.com",
+		DefaultContent: &BulkEmailContent{
+			Template: &Template{TemplateName: "nope"},
+		},
+		BulkEmailEntries: []BulkEmailEntry{
+			{Destination: &Destination{ToAddresses: []string{"a@example.com"}}},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown template")
+	}
+
+	var iErr *IdentityError
+	if !errors.As(err, &iErr) || iErr.Code != errNotFound {
+		t.Fatalf("expected errNotFound, got %v", err)
+	}
+}
+
+func TestSendBulkEmail_EntryWithoutDestinationFailsIndividually(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	if _, err := storage.CreateEmailTemplate(ctx, &CreateEmailTemplateRequest{
+		TemplateName:    "tpl",
+		TemplateContent: &EmailTemplateContent{Subject: "S"},
+	}); err != nil {
+		t.Fatalf("template create failed: %v", err)
+	}
+
+	resp, err := storage.SendBulkEmail(ctx, &SendBulkEmailRequest{
+		FromEmailAddress: "sender@example.com",
+		DefaultContent: &BulkEmailContent{
+			Template: &Template{TemplateName: "tpl"},
+		},
+		BulkEmailEntries: []BulkEmailEntry{
+			{Destination: &Destination{ToAddresses: []string{"a@example.com"}}},
+			{ /* destination missing */ },
+		},
+	})
+	if err != nil {
+		t.Fatalf("send bulk failed: %v", err)
+	}
+
+	if got := resp.BulkEmailEntryResults[0].Status; got != "SUCCESS" {
+		t.Errorf("entry 0 status=%q want SUCCESS", got)
+	}
+	if got := resp.BulkEmailEntryResults[1].Status; got != "FAILED" {
+		t.Errorf("entry 1 status=%q want FAILED", got)
+	}
+}

@@ -472,6 +472,233 @@ func TestSESv2_GetSentEmails(t *testing.T) {
 	}
 }
 
+func TestSESv2_EmailTemplate_CRUD(t *testing.T) {
+	client := newSESv2Client(t)
+	ctx := t.Context()
+
+	const name = "tmpl-crud"
+
+	// Create.
+	if _, err := client.CreateEmailTemplate(ctx, &sesv2.CreateEmailTemplateInput{
+		TemplateName: aws.String(name),
+		TemplateContent: &types.EmailTemplateContent{
+			Subject: aws.String("Hi"),
+			Text:    aws.String("Body"),
+			Html:    aws.String("<p>Body</p>"),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Get.
+	getOutput, err := client.GetEmailTemplate(ctx, &sesv2.GetEmailTemplateInput{
+		TemplateName: aws.String(name),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if getOutput.TemplateName == nil || *getOutput.TemplateName != name {
+		t.Fatalf("unexpected TemplateName: %v", getOutput.TemplateName)
+	}
+
+	if getOutput.TemplateContent == nil || getOutput.TemplateContent.Subject == nil || *getOutput.TemplateContent.Subject != "Hi" {
+		t.Fatalf("unexpected TemplateContent: %+v", getOutput.TemplateContent)
+	}
+
+	// Update.
+	if _, err := client.UpdateEmailTemplate(ctx, &sesv2.UpdateEmailTemplateInput{
+		TemplateName: aws.String(name),
+		TemplateContent: &types.EmailTemplateContent{
+			Subject: aws.String("Hi v2"),
+			Text:    aws.String("Body v2"),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	getOutput, err = client.GetEmailTemplate(ctx, &sesv2.GetEmailTemplateInput{
+		TemplateName: aws.String(name),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if *getOutput.TemplateContent.Subject != "Hi v2" {
+		t.Errorf("update did not take effect: subject=%q", *getOutput.TemplateContent.Subject)
+	}
+
+	// Delete.
+	if _, err := client.DeleteEmailTemplate(ctx, &sesv2.DeleteEmailTemplateInput{
+		TemplateName: aws.String(name),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.GetEmailTemplate(ctx, &sesv2.GetEmailTemplateInput{
+		TemplateName: aws.String(name),
+	}); err == nil {
+		t.Fatal("expected error for deleted template")
+	}
+}
+
+func TestSESv2_ListEmailTemplates(t *testing.T) {
+	client := newSESv2Client(t)
+	ctx := t.Context()
+
+	const name = "tmpl-list"
+
+	if _, err := client.CreateEmailTemplate(ctx, &sesv2.CreateEmailTemplateInput{
+		TemplateName: aws.String(name),
+		TemplateContent: &types.EmailTemplateContent{
+			Subject: aws.String("S"),
+			Text:    aws.String("B"),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := client.ListEmailTemplates(ctx, &sesv2.ListEmailTemplatesInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+
+	for _, m := range out.TemplatesMetadata {
+		if m.TemplateName != nil && *m.TemplateName == name {
+			found = true
+
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("created template not found in list")
+	}
+}
+
+func TestSESv2_SendBulkEmail(t *testing.T) {
+	client := newSESv2Client(t)
+	ctx := t.Context()
+
+	// Create email identity + template referenced by the bulk send.
+	fromEmail := "bulk-sender@example.com"
+
+	if _, err := client.CreateEmailIdentity(ctx, &sesv2.CreateEmailIdentityInput{
+		EmailIdentity: aws.String(fromEmail),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const tmpl = "tmpl-bulk"
+
+	if _, err := client.CreateEmailTemplate(ctx, &sesv2.CreateEmailTemplateInput{
+		TemplateName: aws.String(tmpl),
+		TemplateContent: &types.EmailTemplateContent{
+			Subject: aws.String("Bulk subject"),
+			Text:    aws.String("Hello {{name}}"),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Bulk send to two recipients.
+	resp, err := client.SendBulkEmail(ctx, &sesv2.SendBulkEmailInput{
+		FromEmailAddress: aws.String(fromEmail),
+		DefaultContent: &types.BulkEmailContent{
+			Template: &types.Template{
+				TemplateName: aws.String(tmpl),
+				TemplateData: aws.String("{}"),
+			},
+		},
+		BulkEmailEntries: []types.BulkEmailEntry{
+			{
+				Destination: &types.Destination{ToAddresses: []string{"a@example.com"}},
+				ReplacementEmailContent: &types.ReplacementEmailContent{
+					ReplacementTemplate: &types.ReplacementTemplate{
+						ReplacementTemplateData: aws.String(`{"name":"A"}`),
+					},
+				},
+			},
+			{
+				Destination: &types.Destination{ToAddresses: []string{"b@example.com"}},
+				ReplacementEmailContent: &types.ReplacementEmailContent{
+					ReplacementTemplate: &types.ReplacementTemplate{
+						ReplacementTemplateData: aws.String(`{"name":"B"}`),
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(resp.BulkEmailEntryResults) != 2 {
+		t.Fatalf("expected 2 entry results, got %d", len(resp.BulkEmailEntryResults))
+	}
+
+	for i, r := range resp.BulkEmailEntryResults {
+		if r.Status != types.BulkEmailStatusSuccess {
+			t.Errorf("entry %d: status=%v want Success (err=%v)", i, r.Status, aws.ToString(r.Error))
+		}
+		if r.MessageId == nil || *r.MessageId == "" {
+			t.Errorf("entry %d: empty MessageId", i)
+		}
+	}
+
+	// Verify the recorded sent emails via kumo-specific endpoint.
+	httpResp, err := http.Get("http://localhost:4566/kumo/ses/v2/sent-emails")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer httpResp.Body.Close()
+
+	var result struct {
+		SentEmails []map[string]interface{} `json:"SentEmails"`
+	}
+
+	if err := json.NewDecoder(httpResp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+
+	matching := 0
+
+	for _, e := range result.SentEmails {
+		if e["FromEmailAddress"] == fromEmail && e["TemplateName"] == tmpl {
+			matching++
+		}
+	}
+
+	if matching < 2 {
+		t.Errorf("expected at least 2 sent emails for template %q, got %d", tmpl, matching)
+	}
+}
+
+func TestSESv2_SendBulkEmail_UnknownTemplate(t *testing.T) {
+	client := newSESv2Client(t)
+	ctx := t.Context()
+
+	_, err := client.SendBulkEmail(ctx, &sesv2.SendBulkEmailInput{
+		FromEmailAddress: aws.String("missing-tmpl@example.com"),
+		DefaultContent: &types.BulkEmailContent{
+			Template: &types.Template{
+				TemplateName: aws.String("does-not-exist"),
+				TemplateData: aws.String("{}"),
+			},
+		},
+		BulkEmailEntries: []types.BulkEmailEntry{
+			{
+				Destination: &types.Destination{ToAddresses: []string{"a@example.com"}},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unknown template")
+	}
+}
+
 func findSentEmail(t *testing.T, emails []json.RawMessage, from, subject string) json.RawMessage {
 	t.Helper()
 
