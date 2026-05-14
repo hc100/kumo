@@ -61,8 +61,30 @@ type SentEmail struct {
 	Body                 string       `json:"Body,omitempty"`
 	HTMLBody             string       `json:"HTMLBody,omitempty"`
 	RawData              []byte       `json:"RawData,omitempty"`
+	TemplateName         string       `json:"TemplateName,omitempty"`
+	TemplateData         string       `json:"TemplateData,omitempty"`
 	ConfigurationSetName string       `json:"ConfigurationSetName,omitempty"`
 	SentAt               time.Time    `json:"SentAt"`
+}
+
+// EmailTemplate represents an SES v2 email template.
+type EmailTemplate struct {
+	Name             string
+	TemplateContent  *EmailTemplateContent
+	CreatedTimestamp time.Time
+}
+
+// EmailTemplateContent represents the renderable parts of an email template.
+type EmailTemplateContent struct {
+	Subject string `json:"Subject,omitempty"`
+	Text    string `json:"Text,omitempty"`
+	HTML    string `json:"Html,omitempty"`
+}
+
+// EmailTemplateMetadata describes a template entry returned by ListEmailTemplates.
+type EmailTemplateMetadata struct {
+	TemplateName     string    `json:"TemplateName,omitempty"`
+	CreatedTimestamp time.Time `json:"CreatedTimestamp,omitempty"`
 }
 
 // Destination represents email destinations.
@@ -218,6 +240,81 @@ type MessageTag struct {
 
 // SendEmailResponse is the response for SendEmail.
 type SendEmailResponse struct {
+	MessageID string `json:"MessageId,omitempty"`
+}
+
+// CreateEmailTemplateRequest is the request for CreateEmailTemplate.
+type CreateEmailTemplateRequest struct {
+	TemplateName    string                `json:"TemplateName"`
+	TemplateContent *EmailTemplateContent `json:"TemplateContent,omitempty"`
+}
+
+// UpdateEmailTemplateRequest is the request for UpdateEmailTemplate.
+type UpdateEmailTemplateRequest struct {
+	TemplateContent *EmailTemplateContent `json:"TemplateContent,omitempty"`
+}
+
+// GetEmailTemplateResponse is the response for GetEmailTemplate.
+type GetEmailTemplateResponse struct {
+	TemplateName    string                `json:"TemplateName,omitempty"`
+	TemplateContent *EmailTemplateContent `json:"TemplateContent,omitempty"`
+}
+
+// ListEmailTemplatesRequest is the request for ListEmailTemplates.
+type ListEmailTemplatesRequest struct {
+	NextToken string `json:"NextToken,omitempty"`
+	PageSize  int32  `json:"PageSize,omitempty"`
+}
+
+// ListEmailTemplatesResponse is the response for ListEmailTemplates.
+type ListEmailTemplatesResponse struct {
+	TemplatesMetadata []EmailTemplateMetadata `json:"TemplatesMetadata,omitempty"`
+	NextToken         string                  `json:"NextToken,omitempty"`
+}
+
+// SendBulkEmailRequest is the request for SendBulkEmail.
+type SendBulkEmailRequest struct {
+	FromEmailAddress               string            `json:"FromEmailAddress,omitempty"`
+	FromEmailAddressIdentityArn    string            `json:"FromEmailAddressIdentityArn,omitempty"`
+	ReplyToAddresses               []string          `json:"ReplyToAddresses,omitempty"`
+	FeedbackForwardingEmailAddress string            `json:"FeedbackForwardingEmailAddress,omitempty"`
+	DefaultContent                 *BulkEmailContent `json:"DefaultContent,omitempty"`
+	BulkEmailEntries               []BulkEmailEntry  `json:"BulkEmailEntries,omitempty"`
+	DefaultEmailTags               []MessageTag      `json:"DefaultEmailTags,omitempty"`
+	ConfigurationSetName           string            `json:"ConfigurationSetName,omitempty"`
+}
+
+// BulkEmailContent represents the default content shared across all bulk entries.
+type BulkEmailContent struct {
+	Template *Template `json:"Template,omitempty"`
+}
+
+// BulkEmailEntry represents a single bulk-email destination entry.
+type BulkEmailEntry struct {
+	Destination             *Destination             `json:"Destination,omitempty"`
+	ReplacementEmailContent *ReplacementEmailContent `json:"ReplacementEmailContent,omitempty"`
+	ReplacementTags         []MessageTag             `json:"ReplacementTags,omitempty"`
+}
+
+// ReplacementEmailContent carries per-entry template overrides.
+type ReplacementEmailContent struct {
+	ReplacementTemplate *ReplacementTemplate `json:"ReplacementTemplate,omitempty"`
+}
+
+// ReplacementTemplate carries per-entry replacement template data.
+type ReplacementTemplate struct {
+	ReplacementTemplateData string `json:"ReplacementTemplateData,omitempty"`
+}
+
+// SendBulkEmailResponse is the response for SendBulkEmail.
+type SendBulkEmailResponse struct {
+	BulkEmailEntryResults []BulkEmailEntryResult `json:"BulkEmailEntryResults,omitempty"`
+}
+
+// BulkEmailEntryResult represents the result of a single bulk-email entry.
+type BulkEmailEntryResult struct {
+	Status    string `json:"Status,omitempty"`
+	Error     string `json:"Error,omitempty"`
 	MessageID string `json:"MessageId,omitempty"`
 }
 

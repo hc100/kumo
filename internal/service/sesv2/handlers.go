@@ -257,6 +257,196 @@ func (s *Service) DeleteConfigurationSet(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusOK)
 }
 
+// CreateEmailTemplate handles the CreateEmailTemplate operation.
+func (s *Service) CreateEmailTemplate(w http.ResponseWriter, r *http.Request) {
+	var req CreateEmailTemplateRequest
+	if err := readJSONRequest(r, &req); err != nil {
+		writeError(w, errInvalidParameter, "Invalid request body", http.StatusBadRequest)
+
+		return
+	}
+
+	_, err := s.storage.CreateEmailTemplate(r.Context(), &req)
+	if err != nil {
+		var sErr *IdentityError
+		if errors.As(err, &sErr) {
+			status := http.StatusBadRequest
+			if sErr.Code == errAlreadyExists {
+				status = http.StatusConflict
+			}
+
+			writeError(w, sErr.Code, sErr.Message, status)
+
+			return
+		}
+
+		writeError(w, "InternalServiceError", "Internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// GetEmailTemplate handles the GetEmailTemplate operation.
+func (s *Service) GetEmailTemplate(w http.ResponseWriter, r *http.Request) {
+	name := extractPathParam(r.URL.Path, "/ses/v2/email/templates/")
+	if name == "" {
+		writeError(w, errInvalidParameter, "TemplateName is required", http.StatusBadRequest)
+
+		return
+	}
+
+	tmpl, err := s.storage.GetEmailTemplate(r.Context(), name)
+	if err != nil {
+		var sErr *IdentityError
+		if errors.As(err, &sErr) {
+			status := http.StatusBadRequest
+			if sErr.Code == errNotFound {
+				status = http.StatusNotFound
+			}
+
+			writeError(w, sErr.Code, sErr.Message, status)
+
+			return
+		}
+
+		writeError(w, "InternalServiceError", "Internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	writeJSONResponse(w, GetEmailTemplateResponse{
+		TemplateName:    tmpl.Name,
+		TemplateContent: tmpl.TemplateContent,
+	})
+}
+
+// UpdateEmailTemplate handles the UpdateEmailTemplate operation.
+func (s *Service) UpdateEmailTemplate(w http.ResponseWriter, r *http.Request) {
+	name := extractPathParam(r.URL.Path, "/ses/v2/email/templates/")
+	if name == "" {
+		writeError(w, errInvalidParameter, "TemplateName is required", http.StatusBadRequest)
+
+		return
+	}
+
+	var req UpdateEmailTemplateRequest
+	if err := readJSONRequest(r, &req); err != nil {
+		writeError(w, errInvalidParameter, "Invalid request body", http.StatusBadRequest)
+
+		return
+	}
+
+	_, err := s.storage.UpdateEmailTemplate(r.Context(), name, &req)
+	if err != nil {
+		var sErr *IdentityError
+		if errors.As(err, &sErr) {
+			status := http.StatusBadRequest
+			if sErr.Code == errNotFound {
+				status = http.StatusNotFound
+			}
+
+			writeError(w, sErr.Code, sErr.Message, status)
+
+			return
+		}
+
+		writeError(w, "InternalServiceError", "Internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// DeleteEmailTemplate handles the DeleteEmailTemplate operation.
+func (s *Service) DeleteEmailTemplate(w http.ResponseWriter, r *http.Request) {
+	name := extractPathParam(r.URL.Path, "/ses/v2/email/templates/")
+	if name == "" {
+		writeError(w, errInvalidParameter, "TemplateName is required", http.StatusBadRequest)
+
+		return
+	}
+
+	if err := s.storage.DeleteEmailTemplate(r.Context(), name); err != nil {
+		var sErr *IdentityError
+		if errors.As(err, &sErr) {
+			status := http.StatusBadRequest
+			if sErr.Code == errNotFound {
+				status = http.StatusNotFound
+			}
+
+			writeError(w, sErr.Code, sErr.Message, status)
+
+			return
+		}
+
+		writeError(w, "InternalServiceError", "Internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// ListEmailTemplates handles the ListEmailTemplates operation.
+func (s *Service) ListEmailTemplates(w http.ResponseWriter, r *http.Request) {
+	nextToken := r.URL.Query().Get("NextToken")
+	pageSize := parsePageSize(r.URL.Query().Get("PageSize"))
+
+	templates, nextTokenOut, err := s.storage.ListEmailTemplates(r.Context(), nextToken, pageSize)
+	if err != nil {
+		writeError(w, "InternalServiceError", "Internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	metadata := make([]EmailTemplateMetadata, 0, len(templates))
+	for _, tmpl := range templates {
+		metadata = append(metadata, EmailTemplateMetadata{
+			TemplateName:     tmpl.Name,
+			CreatedTimestamp: tmpl.CreatedTimestamp,
+		})
+	}
+
+	writeJSONResponse(w, ListEmailTemplatesResponse{
+		TemplatesMetadata: metadata,
+		NextToken:         nextTokenOut,
+	})
+}
+
+// SendBulkEmail handles the SendBulkEmail operation.
+func (s *Service) SendBulkEmail(w http.ResponseWriter, r *http.Request) {
+	var req SendBulkEmailRequest
+	if err := readJSONRequest(r, &req); err != nil {
+		writeError(w, errInvalidParameter, "Invalid request body", http.StatusBadRequest)
+
+		return
+	}
+
+	resp, err := s.storage.SendBulkEmail(r.Context(), &req)
+	if err != nil {
+		var sErr *IdentityError
+		if errors.As(err, &sErr) {
+			status := http.StatusBadRequest
+			if sErr.Code == errNotFound {
+				status = http.StatusNotFound
+			}
+
+			writeError(w, sErr.Code, sErr.Message, status)
+
+			return
+		}
+
+		writeError(w, "InternalServiceError", "Internal server error", http.StatusInternalServerError)
+
+		return
+	}
+
+	writeJSONResponse(w, resp)
+}
+
 // SendEmail handles the SendEmail operation.
 func (s *Service) SendEmail(w http.ResponseWriter, r *http.Request) {
 	var req SendEmailRequest
