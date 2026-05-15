@@ -550,98 +550,106 @@ func (s *MemoryStorage) SendBulkEmail(_ context.Context, req *SendBulkEmailReque
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	tmpl, defaultTemplate, err := s.validateBulkEmailRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]BulkEmailEntryResult, 0, len(req.BulkEmailEntries))
+
+	for _, entry := range req.BulkEmailEntries {
+		sent, result := buildBulkEmailEntry(req, &entry, defaultTemplate, tmpl)
+		if sent != nil {
+			s.SentEmails = append(s.SentEmails, sent)
+		}
+
+		results = append(results, result)
+	}
+
+	return &SendBulkEmailResponse{BulkEmailEntryResults: results}, nil
+}
+
+// validateBulkEmailRequest checks the top-level request and resolves the template.
+// Must be called with s.mu held.
+func (s *MemoryStorage) validateBulkEmailRequest(req *SendBulkEmailRequest) (*EmailTemplate, *Template, error) {
 	if len(req.BulkEmailEntries) == 0 {
-		return nil, &IdentityError{
+		return nil, nil, &IdentityError{
 			Code:    errBadRequest,
 			Message: "BulkEmailEntries is required",
 		}
 	}
 
 	if req.DefaultContent == nil || req.DefaultContent.Template == nil {
-		return nil, &IdentityError{
+		return nil, nil, &IdentityError{
 			Code:    errBadRequest,
 			Message: "DefaultContent.Template is required",
 		}
 	}
 
 	defaultTemplate := req.DefaultContent.Template
-	templateName := defaultTemplate.TemplateName
-
-	if templateName == "" {
-		return nil, &IdentityError{
+	if defaultTemplate.TemplateName == "" {
+		return nil, nil, &IdentityError{
 			Code:    errBadRequest,
 			Message: "DefaultContent.Template.TemplateName is required",
 		}
 	}
 
-	// Resolve template content. AWS rejects sends against unknown templates.
-	tmpl, exists := s.EmailTemplates[templateName]
+	tmpl, exists := s.EmailTemplates[defaultTemplate.TemplateName]
 	if !exists {
-		return nil, &IdentityError{
+		return nil, nil, &IdentityError{
 			Code:    errNotFound,
 			Message: "The email template does not exist",
 		}
 	}
 
-	results := make([]BulkEmailEntryResult, 0, len(req.BulkEmailEntries))
+	return tmpl, defaultTemplate, nil
+}
 
-	for _, entry := range req.BulkEmailEntries {
-		messageID := uuid.New().String()
+// buildBulkEmailEntry computes the recorded SentEmail (nil on per-entry failure)
+// and the per-entry result for a single BulkEmailEntry.
+func buildBulkEmailEntry(req *SendBulkEmailRequest, entry *BulkEmailEntry, defaultTemplate *Template, tmpl *EmailTemplate) (*SentEmail, BulkEmailEntryResult) {
+	messageID := uuid.New().String()
 
-		hasDestination := entry.Destination != nil &&
-			(len(entry.Destination.ToAddresses) > 0 ||
-				len(entry.Destination.CcAddresses) > 0 ||
-				len(entry.Destination.BccAddresses) > 0)
+	hasDestination := entry.Destination != nil &&
+		(len(entry.Destination.ToAddresses) > 0 ||
+			len(entry.Destination.CcAddresses) > 0 ||
+			len(entry.Destination.BccAddresses) > 0)
 
-		if !hasDestination {
-			results = append(results, BulkEmailEntryResult{
-				Status:    "FAILED",
-				Error:     "Destination is required",
-				MessageID: messageID,
-			})
-
-			continue
-		}
-
-		templateData := defaultTemplate.TemplateData
-		if entry.ReplacementEmailContent != nil &&
-			entry.ReplacementEmailContent.ReplacementTemplate != nil &&
-			entry.ReplacementEmailContent.ReplacementTemplate.ReplacementTemplateData != "" {
-			templateData = entry.ReplacementEmailContent.ReplacementTemplate.ReplacementTemplateData
-		}
-
-		subject := ""
-		body := ""
-		htmlBody := ""
-
-		if tmpl.TemplateContent != nil {
-			subject = tmpl.TemplateContent.Subject
-			body = tmpl.TemplateContent.Text
-			htmlBody = tmpl.TemplateContent.HTML
-		}
-
-		sent := &SentEmail{
-			MessageID:            messageID,
-			FromEmailAddress:     req.FromEmailAddress,
-			Destination:          cloneDestination(entry.Destination),
-			Subject:              subject,
-			Body:                 body,
-			HTMLBody:             htmlBody,
-			TemplateName:         templateName,
-			TemplateData:         templateData,
-			ConfigurationSetName: req.ConfigurationSetName,
-			SentAt:               time.Now(),
-		}
-
-		s.SentEmails = append(s.SentEmails, sent)
-
-		results = append(results, BulkEmailEntryResult{
-			Status:    "SUCCESS",
+	if !hasDestination {
+		return nil, BulkEmailEntryResult{
+			Status:    "FAILED",
+			Error:     "Destination is required",
 			MessageID: messageID,
-		})
+		}
 	}
 
-	return &SendBulkEmailResponse{BulkEmailEntryResults: results}, nil
+	templateData := defaultTemplate.TemplateData
+	if entry.ReplacementEmailContent != nil &&
+		entry.ReplacementEmailContent.ReplacementTemplate != nil &&
+		entry.ReplacementEmailContent.ReplacementTemplate.ReplacementTemplateData != "" {
+		templateData = entry.ReplacementEmailContent.ReplacementTemplate.ReplacementTemplateData
+	}
+
+	sent := &SentEmail{
+		MessageID:            messageID,
+		FromEmailAddress:     req.FromEmailAddress,
+		Destination:          cloneDestination(entry.Destination),
+		TemplateName:         defaultTemplate.TemplateName,
+		TemplateData:         templateData,
+		ConfigurationSetName: req.ConfigurationSetName,
+		SentAt:               time.Now(),
+	}
+
+	if tmpl.TemplateContent != nil {
+		sent.Subject = tmpl.TemplateContent.Subject
+		sent.Body = tmpl.TemplateContent.Text
+		sent.HTMLBody = tmpl.TemplateContent.HTML
+	}
+
+	return sent, BulkEmailEntryResult{
+		Status:    "SUCCESS",
+		MessageID: messageID,
+	}
 }
 
 // cloneDestination returns a deep copy of a destination to avoid aliasing.

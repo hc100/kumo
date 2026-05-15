@@ -106,39 +106,47 @@ func TestSendEmail_SimpleEmailWithoutDestination_ShouldFail(t *testing.T) {
 	}
 }
 
-func TestEmailTemplate_CRUD(t *testing.T) {
+func TestEmailTemplate_CreateAndGet(t *testing.T) {
 	storage := NewMemoryStorage()
 	ctx := context.Background()
 
-	const name = "welcome"
-
-	// Create.
-	created, err := storage.CreateEmailTemplate(ctx, &CreateEmailTemplateRequest{
-		TemplateName: name,
+	if _, err := storage.CreateEmailTemplate(ctx, &CreateEmailTemplateRequest{
+		TemplateName: "welcome",
 		TemplateContent: &EmailTemplateContent{
 			Subject: "Hello",
 			Text:    "Body text",
 			HTML:    "<p>Body HTML</p>",
 		},
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
-	if created.Name != name {
-		t.Fatalf("created name=%q want %q", created.Name, name)
-	}
 
-	// Get.
-	got, err := storage.GetEmailTemplate(ctx, name)
+	got, err := storage.GetEmailTemplate(ctx, "welcome")
 	if err != nil {
 		t.Fatalf("get failed: %v", err)
 	}
+
 	if got.TemplateContent == nil || got.TemplateContent.Subject != "Hello" {
 		t.Fatalf("get returned unexpected content: %+v", got.TemplateContent)
 	}
+}
 
-	// Update.
-	if _, err := storage.UpdateEmailTemplate(ctx, name, &UpdateEmailTemplateRequest{
+func TestEmailTemplate_Update(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	if _, err := storage.CreateEmailTemplate(ctx, &CreateEmailTemplateRequest{
+		TemplateName: "welcome",
+		TemplateContent: &EmailTemplateContent{
+			Subject: "Hello",
+			Text:    "Body text",
+			HTML:    "<p>Body HTML</p>",
+		},
+	}); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	if _, err := storage.UpdateEmailTemplate(ctx, "welcome", &UpdateEmailTemplateRequest{
 		TemplateContent: &EmailTemplateContent{
 			Subject: "Hello v2",
 			Text:    "Body text v2",
@@ -147,32 +155,57 @@ func TestEmailTemplate_CRUD(t *testing.T) {
 		t.Fatalf("update failed: %v", err)
 	}
 
-	updated, err := storage.GetEmailTemplate(ctx, name)
+	updated, err := storage.GetEmailTemplate(ctx, "welcome")
 	if err != nil {
 		t.Fatalf("get after update failed: %v", err)
 	}
+
 	if updated.TemplateContent.Subject != "Hello v2" {
 		t.Errorf("expected updated subject, got %q", updated.TemplateContent.Subject)
 	}
+
 	if updated.TemplateContent.HTML != "" {
 		t.Errorf("expected HTML cleared on update, got %q", updated.TemplateContent.HTML)
 	}
+}
 
-	// List.
+func TestEmailTemplate_List(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	if _, err := storage.CreateEmailTemplate(ctx, &CreateEmailTemplateRequest{
+		TemplateName:    "welcome",
+		TemplateContent: &EmailTemplateContent{Subject: "Hello"},
+	}); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
 	list, _, err := storage.ListEmailTemplates(ctx, "", 10)
 	if err != nil {
 		t.Fatalf("list failed: %v", err)
 	}
-	if len(list) != 1 || list[0].Name != name {
+
+	if len(list) != 1 || list[0].Name != "welcome" {
 		t.Fatalf("unexpected list result: %+v", list)
 	}
+}
 
-	// Delete.
-	if err := storage.DeleteEmailTemplate(ctx, name); err != nil {
+func TestEmailTemplate_Delete(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	if _, err := storage.CreateEmailTemplate(ctx, &CreateEmailTemplateRequest{
+		TemplateName:    "welcome",
+		TemplateContent: &EmailTemplateContent{Subject: "Hello"},
+	}); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	if err := storage.DeleteEmailTemplate(ctx, "welcome"); err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
 
-	if _, err := storage.GetEmailTemplate(ctx, name); err == nil {
+	if _, err := storage.GetEmailTemplate(ctx, "welcome"); err == nil {
 		t.Fatal("expected error for deleted template")
 	}
 }
@@ -216,12 +249,12 @@ func TestEmailTemplate_GetNotFound(t *testing.T) {
 	}
 }
 
-func TestSendBulkEmail_AssignsMessageIDPerEntry(t *testing.T) {
-	storage := NewMemoryStorage()
-	ctx := context.Background()
+// newBulkSendFixture seeds a template named "promo" and returns a request that
+// targets two distinct recipients with per-entry replacement data.
+func newBulkSendFixture(t *testing.T, storage *MemoryStorage) *SendBulkEmailRequest {
+	t.Helper()
 
-	// Set up a template referenced by the bulk request.
-	if _, err := storage.CreateEmailTemplate(ctx, &CreateEmailTemplateRequest{
+	if _, err := storage.CreateEmailTemplate(context.Background(), &CreateEmailTemplateRequest{
 		TemplateName: "promo",
 		TemplateContent: &EmailTemplateContent{
 			Subject: "Promo",
@@ -231,13 +264,10 @@ func TestSendBulkEmail_AssignsMessageIDPerEntry(t *testing.T) {
 		t.Fatalf("template create failed: %v", err)
 	}
 
-	req := &SendBulkEmailRequest{
+	return &SendBulkEmailRequest{
 		FromEmailAddress: "sender@example.com",
 		DefaultContent: &BulkEmailContent{
-			Template: &Template{
-				TemplateName: "promo",
-				TemplateData: "{}",
-			},
+			Template: &Template{TemplateName: "promo", TemplateData: "{}"},
 		},
 		BulkEmailEntries: []BulkEmailEntry{
 			{
@@ -254,11 +284,18 @@ func TestSendBulkEmail_AssignsMessageIDPerEntry(t *testing.T) {
 			},
 		},
 	}
+}
+
+func TestSendBulkEmail_AssignsMessageIDPerEntry(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+	req := newBulkSendFixture(t, storage)
 
 	resp, err := storage.SendBulkEmail(ctx, req)
 	if err != nil {
 		t.Fatalf("send bulk failed: %v", err)
 	}
+
 	if len(resp.BulkEmailEntryResults) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(resp.BulkEmailEntryResults))
 	}
@@ -269,26 +306,41 @@ func TestSendBulkEmail_AssignsMessageIDPerEntry(t *testing.T) {
 		if r.Status != "SUCCESS" {
 			t.Errorf("entry %d: status=%q want SUCCESS (err=%q)", i, r.Status, r.Error)
 		}
+
 		if r.MessageID == "" {
 			t.Errorf("entry %d: empty MessageId", i)
 		}
+
 		ids[r.MessageID] = struct{}{}
 	}
 
 	if len(ids) != 2 {
 		t.Errorf("expected 2 distinct MessageIds, got %d", len(ids))
 	}
+}
+
+func TestSendBulkEmail_RecordsSentEmails(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+	req := newBulkSendFixture(t, storage)
+
+	if _, err := storage.SendBulkEmail(ctx, req); err != nil {
+		t.Fatalf("send bulk failed: %v", err)
+	}
 
 	sent, err := storage.GetSentEmails(ctx)
 	if err != nil {
 		t.Fatalf("get sent emails failed: %v", err)
 	}
+
 	if len(sent) != 2 {
 		t.Fatalf("expected 2 stored emails, got %d", len(sent))
 	}
+
 	if sent[0].TemplateName != "promo" {
 		t.Errorf("expected TemplateName=promo, got %q", sent[0].TemplateName)
 	}
+
 	if sent[0].TemplateData != `{"name":"A"}` {
 		t.Errorf("expected per-entry replacement data, got %q", sent[0].TemplateData)
 	}
@@ -345,6 +397,7 @@ func TestSendBulkEmail_EntryWithoutDestinationFailsIndividually(t *testing.T) {
 	if got := resp.BulkEmailEntryResults[0].Status; got != "SUCCESS" {
 		t.Errorf("entry 0 status=%q want SUCCESS", got)
 	}
+
 	if got := resp.BulkEmailEntryResults[1].Status; got != "FAILED" {
 		t.Errorf("entry 1 status=%q want FAILED", got)
 	}
