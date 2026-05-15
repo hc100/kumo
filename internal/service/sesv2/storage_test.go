@@ -2,9 +2,40 @@ package sesv2
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestEpochSeconds_MarshalsAsJSONNumber(t *testing.T) {
+	// Pin to a known instant so the assertion is exact.
+	ts := time.Unix(1700000000, 500_000_000) // 1.7e9 + 0.5 sec
+
+	got, err := json.Marshal(epochSeconds(ts))
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	out := string(got)
+	if strings.Contains(out, `"`) {
+		t.Fatalf("expected JSON number, got string %q", out)
+	}
+
+	if _, err := strconv.ParseFloat(out, 64); err != nil {
+		t.Fatalf("expected parseable float, got %q (err=%v)", out, err)
+	}
+
+	// Must round-trip to the same instant (within float precision).
+	const want = 1700000000.5
+
+	got64, _ := strconv.ParseFloat(out, 64)
+	if diff := got64 - want; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected ~%v, got %v", want, got64)
+	}
+}
 
 func TestSendEmail_RawEmailWithoutDestination(t *testing.T) {
 	storage := &MemoryStorage{}

@@ -406,7 +406,7 @@ func (s *Service) ListEmailTemplates(w http.ResponseWriter, r *http.Request) {
 	for _, tmpl := range templates {
 		metadata = append(metadata, EmailTemplateMetadata{
 			TemplateName:     tmpl.Name,
-			CreatedTimestamp: tmpl.CreatedTimestamp,
+			CreatedTimestamp: epochSeconds(tmpl.CreatedTimestamp),
 		})
 	}
 

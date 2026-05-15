@@ -1,7 +1,24 @@
 // Package sesv2 provides SES v2 service emulation for kumo.
 package sesv2
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
+
+// epochSeconds is a time.Time-compatible value that JSON-marshals as a
+// Unix-epoch number (with optional fractional seconds). The AWS SES v2
+// rest-json protocol uses this representation for Timestamp shapes; the
+// SDK's deserializer rejects ISO 8601 strings with
+// "expected Timestamp to be a JSON Number, got string instead".
+type epochSeconds time.Time
+
+// MarshalJSON implements json.Marshaler.
+func (t epochSeconds) MarshalJSON() ([]byte, error) {
+	secs := float64(time.Time(t).UnixNano()) / 1e9
+
+	return []byte(strconv.FormatFloat(secs, 'f', -1, 64)), nil
+}
 
 // EmailIdentity represents an email identity (email address or domain).
 type EmailIdentity struct {
@@ -83,8 +100,8 @@ type EmailTemplateContent struct {
 
 // EmailTemplateMetadata describes a template entry returned by ListEmailTemplates.
 type EmailTemplateMetadata struct {
-	TemplateName     string    `json:"TemplateName,omitempty"`
-	CreatedTimestamp time.Time `json:"CreatedTimestamp,omitempty"`
+	TemplateName     string       `json:"TemplateName,omitempty"`
+	CreatedTimestamp epochSeconds `json:"CreatedTimestamp,omitempty"`
 }
 
 // Destination represents email destinations.
